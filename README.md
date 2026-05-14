@@ -1,314 +1,135 @@
-# RAG Pinecone — Production-Ready Retrieval-Augmented Generation
+<div align="center">
+  <h1>⚖️ Indian Legal RAG Backend</h1>
+  <p><strong>A Production-Ready Retrieval-Augmented Generation System for Indian Law</strong></p>
+</div>
 
-A production-ready RAG system built with **FastAPI**, **Pinecone Serverless**,
-**Google Gemini Embeddings**, **FlashRank** reranking, and **Groq LLM** via LiteLLM.
+<div align="center">
+  <img src="https://img.shields.io/badge/Python-3.10+-blue.svg" alt="Python Version">
+  <img src="https://img.shields.io/badge/FastAPI-0.115-009688.svg" alt="FastAPI">
+  <img src="https://img.shields.io/badge/VectorDB-Pinecone-yellow.svg" alt="Pinecone">
+  <img src="https://img.shields.io/badge/LLM-Groq%20%7C%20Gemini-orange.svg" alt="LLMs">
+</div>
 
-```
-┌─────────────────────────────────────────────────────────────────────┐
-│                        CLIENT REQUEST                              │
-│                     POST /query or /ingest                         │
-└──────────────────────────┬──────────────────────────────────────────┘
+---
+
+## 📖 Overview
+
+The **Indian Legal RAG** is an API-only backend service designed to answer complex legal questions based on the Indian legal framework. 
+
+It uses a highly optimized **Hierarchical RAG architecture**, combining fast retrieval via Pinecone with a dual-LLM routing strategy using **Groq (LLaMA 3.3 70B)** for lightning-fast factual lookups and **Google Gemini 2.5 Flash** for deep constitutional reasoning.
+
+> **New to the project?** Please read the [HOW_TO_USE.md](./HOW_TO_USE.md) guide for step-by-step setup instructions.
+
+---
+
+## ✨ Key Features
+
+1. **Hierarchical Chunking (Parent-Child Strategy)**
+   - **Child Chunks (400 tokens):** Used strictly for high-precision vector similarity search.
+   - **Parent Chunks (1500 tokens):** Dynamically fetched when the vector confidence score is below 0.75, giving the LLM the surrounding legal context to prevent hallucination.
+   
+2. **Intelligent Query Router**
+   - **Groq Pipeline:** Automatically selected for direct queries (e.g., *"What is Section 302 of the IPC?"*). Delivers answers in < 1 second.
+   - **Gemini Pipeline:** Automatically triggered via keyword detection for complex queries (e.g., *"Compare the old CrPC with the new BNSS"*).
+   
+3. **Dedicated Legal Tools**
+   - **Section Lookup:** Directly fetch bare acts without passing through the LLM.
+   - **Citation Generator:** Formats legal sources rigorously (e.g., *Section 302 of the Indian Penal Code*).
+   - **Plain English Explainer:** Dedicated endpoint to demystify heavy legal jargon for standard users.
+
+---
+
+## 🏗️ System Architecture
+
+```text
+┌──────────────────────────────────────────────────────────┐
+│                    CLIENT (API Consumer)                 │
+└──────────────────────────┬───────────────────────────────┘
+                           │ POST /api/query
+                           ▼
+┌──────────────────────────────────────────────────────────┐
+│               FastAPI Backend (port 8000)                │
+│                                                          │
+│  ┌─────────────┐  ┌──────────────┐  ┌────────────────┐  │
+│  │ Query Router│  │ RAG Engine   │  │ Tool Service   │  │
+│  │ • Classify  │  │ • Embed query│  │ • IPC Lookup   │  │
+│  │ • Route     │─▶│ • Search     │  │ • Bare Acts    │  │
+│  └─────────────┘  │ • Parent Exp │  │ • Citations    │  │
+│                   └──────┬───────┘  └────────────────┘  │
+│                   ┌──────▼───────┐                      │
+│                   │  LLM Layer   │                      │
+│                   │ Groq | Gemini│                      │
+│                   └──────────────┘                      │
+└──────────────────────────────────────────────────────────┘
                            │
-                    ┌──────▼──────┐
-                    │   FastAPI   │
-                    │  + Rate     │
-                    │  Limiter    │
-                    └──────┬──────┘
-                           │
-          ┌────────────────┼────────────────┐
-          │                │                │
-   ┌──────▼──────┐  ┌─────▼──────┐  ┌──────▼──────┐
-   │  /query     │  │  /ingest   │  │  /health    │
-   └──────┬──────┘  └─────┬──────┘  └─────────────┘
-          │               │
-          │         ┌─────▼──────┐
-          │         │   Celery   │──── Upstash Redis (TLS)
-          │         │   Worker   │
-          │         └─────┬──────┘
-          │               │
-          │    ┌──────────┼──────────┐
-          │    │ Loader → Chunker → │
-          │    │ Embedder → Upserter│
-          │    └──────────┬─────────┘
-          │               │
-   ┌──────▼──────┐  ┌─────▼──────┐
-   │  Semantic   │  │  Pinecone  │
-   │  Cache      │  │  (768-dim) │
-   │  (Upstash)  │  │  cosine    │
-   └──────┬──────┘  └─────┬──────┘
-          │               │
-   ┌──────▼───────────────▼──────┐
-   │  HyDE + Multi-Query Search  │
-   │  → FlashRank Reranking      │
-   │  → Prompt Builder           │
-   │  → Groq LLM (LiteLLM)      │
-   │  → Citation Parser          │
-   └──────┬──────────────────────┘
-          │
-   ┌──────▼──────┐
-   │  Langfuse   │
-   │  Tracing    │
-   └─────────────┘
+              ┌────────────▼────────────┐
+              │     Pinecone Vector DB  │
+              │   gemini-embedding-2    │
+              │   768-dims, cosine      │
+              └─────────────────────────┘
 ```
 
 ---
 
-## Quick Start
+## 📂 Project Structure
 
-### 1. Clone & Configure
-
-```bash
-git clone <repo-url>
-cd rag-pinecone
-cp .env.example .env
-# Fill in all API keys in .env
+```text
+legal-rag/
+├── .env                        # API keys (Groq, Gemini, Pinecone)
+├── requirements.txt            # Python dependencies
+├── main.py                     # FastAPI server entrypoint
+│
+├── app/
+│   ├── config.py               # Centralized Pydantic settings
+│   ├── models.py               # Request/Response schemas
+│   ├── rag.py                  # Core RAG logic (Embed + Retrieve + Parent Expand)
+│   ├── llm.py                  # Groq & Gemini client wrappers & prompts
+│   ├── router.py               # Classification routing (Groq vs Gemini)
+│   └── tools/
+│       ├── section_lookup.py   # Direct metadata lookups
+│       ├── citation_gen.py     # Citation formatting
+│       └── bare_act.py         # Bare act extraction logic
+│
+├── data/                       # (Ignored in Git, created locally)
+│   ├── raw/                    # Place raw legal PDFs here
+│   └── chunks/                 # Generated parent/child JSONL chunks
+│
+├── scripts/
+│   ├── parse_pdfs.py           # Extracts and cleans PDF text
+│   ├── chunk_data.py           # Creates the Parent-Child chunk mapping
+│   └── ingest_pinecone.py      # Rate-limited Pinecone batch ingestion
+│
+└── HOW_TO_USE.md               # Step-by-step setup and usage tutorial
 ```
 
-### 2. Install Dependencies
+---
+
+## 📡 API Endpoints Summary
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| `POST` | `/api/query` | The primary RAG query endpoint. |
+| `GET` | `/api/section/{act}/{section}` | Fetches raw bare act text for a specific section. |
+| `POST` | `/api/explain` | Explains a legal term (e.g., "Habeas Corpus") in plain English. |
+| `GET` | `/api/acts` | Lists all successfully indexed acts and section counts. |
+| `GET` | `/health` | Pinecone connectivity check. |
+
+---
+
+## 🚀 Quick Start
+
+Ensure you have your API keys ready in `.env` and `data/raw/` populated with legal PDFs.
 
 ```bash
-python -m venv venv
-# Windows:
-venv\Scripts\activate
-# Linux/Mac:
-source venv/bin/activate
-
+# 1. Install Dependencies
 pip install -r requirements.txt
+
+# 2. Ingest Data (Order is important)
+python scripts/parse_pdfs.py
+python scripts/chunk_data.py
+python scripts/ingest_pinecone.py
+
+# 3. Start the Server
+python -m uvicorn main:app --host 0.0.0.0 --port 8000
 ```
-
-### 3. Run the API Server
-
-```bash
-uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
-```
-
-### 4. Start the Celery Worker (separate terminal)
-
-```bash
-celery -A app.workers.celery_app worker --loglevel=info --concurrency=2
-```
-
-### 5. Using Docker Compose
-
-```bash
-docker-compose up --build
-```
-
-> **Note:** FlashRank model weights (~22 MB) are downloaded automatically on
-> first startup and cached in the `flashrank_cache` Docker volume.
-
----
-
-## Environment Variables
-
-| Variable | Required | Description |
-|----------|----------|-------------|
-| `PINECONE_API_KEY` | ✅ | Pinecone API key |
-| `PINECONE_HOST` | ✅ | Pinecone index host URL |
-| `PINECONE_INDEX_NAME` | ✅ | Pinecone index name |
-| `PINECONE_CLOUD` | ❌ | Cloud provider (default: `aws`) |
-| `PINECONE_REGION` | ❌ | Region (default: `us-east-1`) |
-| `GEMINI_API_KEY` | ✅ | Google Gemini API key |
-| `GROQ_API_KEY` | ✅ | Groq API key |
-| `UPSTASH_REDIS_REST_URL` | ✅ | Upstash Redis REST endpoint |
-| `UPSTASH_REDIS_REST_TOKEN` | ✅ | Upstash Redis REST token |
-| `LANGFUSE_SECRET_KEY` | ✅ | Langfuse secret key |
-| `LANGFUSE_PUBLIC_KEY` | ✅ | Langfuse public key |
-| `LANGFUSE_BASE_URL` | ❌ | Langfuse host (default: `https://us.cloud.langfuse.com`) |
-
----
-
-## API Reference
-
-### `GET /health`
-
-Health check endpoint. No auth required.
-
-**Response (200):**
-```json
-{
-  "status": "ok",
-  "checks": {
-    "pinecone": "ok",
-    "redis": "ok",
-    "celery": "ok"
-  }
-}
-```
-Returns **503** if any check fails.
-
----
-
-### `POST /ingest`
-
-Dispatch an async document ingestion task.
-
-**Request:**
-```json
-{
-  "source_url_or_path": "https://example.com/paper.pdf",
-  "namespace": "my-project"
-}
-```
-
-**Response (200):**
-```json
-{
-  "task_id": "abc123-...",
-  "status": "queued"
-}
-```
-
----
-
-### `GET /ingest/{task_id}/status`
-
-Poll the status of an ingestion task.
-
-**Response:**
-```json
-{
-  "task_id": "abc123-...",
-  "status": "PROGRESS",
-  "progress": {"step": "embedding", "progress": 50},
-  "result": null,
-  "error": null
-}
-```
-
----
-
-### `POST /query`
-
-Ask a question against your ingested documents.
-
-**Request:**
-```json
-{
-  "question": "What is machine learning?",
-  "namespace": "my-project",
-  "stream": false
-}
-```
-
-**Response (200):**
-```json
-{
-  "answer": "Machine learning is a subset of AI that...[1]",
-  "no_answer": false,
-  "sources": [
-    {"text": "...", "source": "ml.pdf", "page": 5, "score": 0.95}
-  ],
-  "cached": false,
-  "latency_ms": 1420
-}
-```
-
-**No-answer response:**
-```json
-{
-  "answer": null,
-  "no_answer": true,
-  "sources": [],
-  "cached": false,
-  "latency_ms": 850
-}
-```
-
-**SSE Streaming (`stream: true`):**
-- Events with `event: token` stream answer tokens
-- Final `event: done` contains the full response JSON with sources
-
----
-
-## How to Swap the LLM
-
-Only change the `LLM_MODEL` setting — nothing else:
-
-```env
-# In .env — change from Groq to OpenAI, Anthropic, etc.
-LLM_MODEL=groq/llama-3.3-70b-versatile     # default
-LLM_MODEL=gpt-4o                            # OpenAI
-LLM_MODEL=claude-3-5-sonnet-20241022        # Anthropic
-```
-
-LiteLLM handles the routing. Add the corresponding API key
-(e.g., `OPENAI_API_KEY`) to `.env`.
-
----
-
-## Multi-Tenancy via Namespaces
-
-Every `/ingest` and `/query` request includes a `namespace` parameter.
-Namespaces provide **complete data isolation** within a single Pinecone
-index — documents in namespace `"project-a"` are invisible to queries
-targeting namespace `"project-b"`.
-
-Use cases:
-- Per-user document stores
-- Per-project knowledge bases
-- Environment separation (dev/staging/prod)
-
----
-
-## Hybrid Search Roadmap
-
-This build uses **dense-only search** (Gemini 768-dim embeddings) +
-FlashRank reranking. To add hybrid search in a future phase:
-
-1. **Install** `pinecone-text` for sparse encoding:
-   ```bash
-   pip install pinecone-text
-   ```
-
-2. **Extend `embedder.py`** to generate sparse vectors:
-   ```python
-   from pinecone_text.sparse import BM25Encoder
-   bm25 = BM25Encoder()
-   bm25.fit(corpus)  # fit on your document corpus
-   sparse_values = bm25.encode_documents(text)
-   ```
-
-3. **Extend `upserter.py`** to include `sparse_values` in each upsert record:
-   ```python
-   {"id": ..., "values": dense, "sparse_values": sparse, "metadata": ...}
-   ```
-
-4. **Update `searcher.py`** to pass both `vector` and `sparse_vector`
-   in query calls.
-
----
-
-## Architecture Details
-
-| Component | Technology | Purpose |
-|-----------|-----------|---------|
-| API Framework | FastAPI + Uvicorn | HTTP API with async support |
-| Vector DB | Pinecone Serverless | Dense vector storage (768-dim, cosine) |
-| Embeddings | Google Gemini `text-embedding-004` | 768-dim document/query embeddings |
-| Reranker | FlashRank (`ms-marco-TinyBERT-L-2-v2`) | Local CPU cross-encoder reranking |
-| LLM | Groq `llama-3.3-70b-versatile` via LiteLLM | Answer generation with citations |
-| Cache | Upstash Redis (REST SDK) | Semantic query cache (cosine > 0.92) |
-| Queue | Celery + Upstash Redis (TLS) | Async document ingestion |
-| Observability | Langfuse | Query/ingestion tracing |
-
----
-
-## Running Tests
-
-```bash
-# Run all tests (unit tests work without API keys)
-pytest tests/ -v
-
-# Run only unit tests (no API keys needed)
-pytest tests/ -v -k "not skipif"
-
-# Run integration tests (requires API keys in .env)
-pytest tests/ -v --tb=short
-```
-
----
-
-## License
-
-MIT
+For a detailed breakdown of these steps, please read [HOW_TO_USE.md](./HOW_TO_USE.md).

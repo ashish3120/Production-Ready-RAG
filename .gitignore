@@ -1,54 +1,10 @@
-# Ignore all markdown files
-*.md
-
-# Except README.md
-!README.md
-!rag-pinecone/README.md
-
-# Python
-__pycache__/
-*.py[cod]
-*$py.class
-*.so
-.Python
-env/
-build/
-develop-eggs/
-dist/
-downloads/
-eggs/
-.eggs/
-lib/
-lib64/
-parts/
-sdist/
-var/
-*.egg-info/
-.installed.cfg
-*.egg
-
-# Virtual environments
-venv/
-env/
-ENV/
-env.bak/
-venv.bak/
-
-# Environment variables
 .env
-.env.local
-
-# pytest
-.pytest_cache/
-
-# IDEs
-.vscode/
-.idea/
-*.swp
-
-# Docker
-.dockerignore
-
-# Celery
-celerybeat-schedule
-*.pid
+__pycache__/
+*.pyc
+.DS_Store
+data/raw/*.pdf
+data/raw/*.txt
+data/chunks/*.jsonl
+venv/
+.venv/
+env/
