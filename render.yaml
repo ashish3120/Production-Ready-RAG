@@ -1,0 +1,20 @@
+# Render Blueprint — one-click deploy
+# https://render.com/docs/blueprint-spec
+
+services:
+  - type: web
+    name: indian-legal-rag-api
+    runtime: docker
+    plan: free
+    healthCheckPath: /health
+    envVars:
+      - key: PINECONE_API_KEY
+        sync: false  # Set manually in Render dashboard
+      - key: PINECONE_INDEX_NAME
+        value: indian-law
+      - key: GROQ_API_KEY
+        sync: false
+      - key: GOOGLE_API_KEY
+        sync: false
+      - key: GEMINI_API_KEY
+        sync: false

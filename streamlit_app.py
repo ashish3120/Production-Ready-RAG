@@ -8,7 +8,8 @@ import requests
 import streamlit as st
 
 # ── Configuration ──────────────────────────────────────────
-API_BASE = "http://localhost:8000"
+# Reads from Streamlit secrets (cloud) or falls back to localhost (local dev)
+API_BASE = st.secrets.get("API_BASE_URL", "http://localhost:8000").rstrip("/")
 
 # ── Page Config ────────────────────────────────────────────
 st.set_page_config(
