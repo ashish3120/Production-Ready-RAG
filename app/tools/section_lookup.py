@@ -55,7 +55,7 @@ def lookup_section(act: str, section: str) -> dict | None:
         dummy_vector = [0.0] * settings.EMBEDDING_DIMENSIONS
         results = index.query(
             vector=dummy_vector,
-            top_k=5,
+            top_k=3,
             include_metadata=True,
             filter={
                 "act": {"$eq": act_name},

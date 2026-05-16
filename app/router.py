@@ -55,31 +55,17 @@ def route_query(query: str, force_detailed: bool = False) -> str:
     """
     Classify a query and return the LLM to use.
 
+    Currently routes ALL queries to Groq (LLaMA 3.3 70B).
+    Gemini API key is reserved for embeddings only.
+
     Args:
         query: The user's legal question.
-        force_detailed: If True, always use Gemini.
+        force_detailed: Reserved for future use.
 
     Returns:
-        "groq" or "gemini"
+        "groq" (always)
     """
-    if force_detailed:
-        logger.info("Routing to Gemini (force_detailed=True)")
-        return "gemini"
-
-    q = query.lower()
-
-    # Check for complex keywords
-    if any(kw in q for kw in COMPLEX_KEYWORDS):
-        logger.info("Routing to Gemini (complex query detected)")
-        return "gemini"
-
-    # Long queries are likely complex
-    word_count = len(q.split())
-    if word_count > 25:
-        logger.info("Routing to Gemini (long query: %d words)", word_count)
-        return "gemini"
-
-    logger.info("Routing to Groq (simple/factual query)")
+    logger.info("Routing to Groq (all queries)")
     return "groq"
 
 

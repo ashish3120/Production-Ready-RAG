@@ -10,6 +10,8 @@ Implements hierarchical (parent-child) retrieval:
 
 import json
 import logging
+import re
+import time
 from pathlib import Path
 
 from google import genai
@@ -36,6 +38,17 @@ def _get_index():
         _pc_index = pc.Index(settings.PINECONE_INDEX_NAME)
         logger.info("Connected to Pinecone index: %s", settings.PINECONE_INDEX_NAME)
     return _pc_index
+
+
+def warmup() -> None:
+    """
+    Pre-warm Pinecone connection and parent cache at startup.
+    Call this during app lifespan to eliminate cold-start latency.
+    """
+    logger.info("Warming up RAG engine...")
+    _get_index()
+    _load_parent_cache()
+    logger.info("RAG engine warm-up complete")
 
 
 def _load_parent_cache() -> None:
@@ -69,36 +82,71 @@ def _load_parent_cache() -> None:
 # Embedding
 # ──────────────────────────────────────────────
 
+_genai_client = None
+
+
 def _get_genai_client():
-    """Get a google.genai client instance."""
+    """Return cached google.genai client singleton."""
+    global _genai_client
+    if _genai_client is None:
+        settings = get_settings()
+        _genai_client = genai.Client(api_key=settings.google_api_key_resolved)
+        logger.info("GenAI embedding client initialized")
+    return _genai_client
+
+
+def _parse_retry_delay(error_str: str) -> int:
+    """Extract Google's suggested retryDelay from a 429 error."""
+    match = re.search(r"retryDelay['\"]?:\s*['\"]?(\d+)", error_str)
+    if match:
+        return int(match.group(1)) + 3
+    return 60
+
+
+def _embed_with_retry(text: str, task_type: str, max_retries: int = 3) -> list[float]:
+    """
+    Embed text with automatic rate-limit waiting.
+    Waits patiently on 429, retries on network errors, fails on others.
+    """
     settings = get_settings()
-    return genai.Client(api_key=settings.google_api_key_resolved)
+    client = _get_genai_client()
+    network_retries = 0
+
+    while True:
+        try:
+            result = client.models.embed_content(
+                model=settings.EMBEDDING_MODEL,
+                contents=text,
+                config={
+                    "task_type": task_type,
+                    "output_dimensionality": settings.EMBEDDING_DIMENSIONS,
+                },
+            )
+            return list(result.embeddings[0].values)
+
+        except Exception as e:
+            err = str(e)
+            if "429" in err:
+                wait = _parse_retry_delay(err)
+                logger.warning("Embedding rate limited. Waiting %ds...", wait)
+                time.sleep(wait)
+            elif any(x in err for x in ["503", "504", "Timeout"]):
+                network_retries += 1
+                if network_retries >= max_retries:
+                    raise RuntimeError(f"Embedding failed after {max_retries} retries: {e}") from e
+                time.sleep(10 * network_retries)
+            else:
+                raise
 
 
 def embed_document(text: str) -> list[float]:
     """Embed text for document ingestion (RETRIEVAL_DOCUMENT task)."""
-    settings = get_settings()
-    client = _get_genai_client()
-
-    result = client.models.embed_content(
-        model=settings.EMBEDDING_MODEL,
-        contents=text,
-        config={"task_type": "RETRIEVAL_DOCUMENT"},
-    )
-    return list(result.embeddings[0].values)
+    return _embed_with_retry(text, "RETRIEVAL_DOCUMENT")
 
 
 def embed_query(text: str) -> list[float]:
     """Embed text for query retrieval (RETRIEVAL_QUERY task)."""
-    settings = get_settings()
-    client = _get_genai_client()
-
-    result = client.models.embed_content(
-        model=settings.EMBEDDING_MODEL,
-        contents=text,
-        config={"task_type": "RETRIEVAL_QUERY"},
-    )
-    return list(result.embeddings[0].values)
+    return _embed_with_retry(text, "RETRIEVAL_QUERY")
 
 
 # ──────────────────────────────────────────────

@@ -32,7 +32,7 @@ class Settings(BaseSettings):
     EMBEDDING_DIMENSIONS: int = 768
 
     # --- RAG Parameters ---
-    TOP_K: int = 5
+    TOP_K: int = 3
     CONFIDENCE_THRESHOLD: float = 0.75
     CHILD_CHUNK_SIZE: int = 400
     CHILD_CHUNK_OVERLAP: int = 80

@@ -9,12 +9,14 @@ Endpoints:
   GET  /health             → Health check
 """
 
+import json
 import logging
 from contextlib import asynccontextmanager
 
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse
 
 load_dotenv()
 
@@ -29,8 +31,8 @@ from app.models import (
     SectionResponse,
     SourceInfo,
 )
-from app.rag import retrieve, get_index_stats
-from app.llm import build_prompt, generate_answer
+from app.rag import retrieve, get_index_stats, warmup as warmup_rag
+from app.llm import build_prompt, generate_answer, stream_answer
 from app.router import route_query, classify_query_type, get_act_filter
 from app.tools.section_lookup import lookup_section
 from app.tools.citation_gen import format_citation
@@ -53,13 +55,22 @@ logger = logging.getLogger(__name__)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Startup/shutdown lifecycle."""
+    """Startup/shutdown lifecycle with pre-warming."""
     settings = get_settings()
     logger.info("Starting Indian Legal RAG API")
     logger.info("Pinecone index: %s", settings.PINECONE_INDEX_NAME)
     logger.info("Embedding model: %s", settings.EMBEDDING_MODEL)
     logger.info("Groq model: %s", settings.GROQ_MODEL)
     logger.info("Gemini model: %s", settings.GEMINI_MODEL)
+
+    # Pre-warm: Pinecone connection + parent cache + LLM clients
+    # This eliminates ~2.7s cold-start on the first request
+    try:
+        warmup_rag()
+        logger.info("All services pre-warmed successfully")
+    except Exception as e:
+        logger.warning("Warm-up partially failed (will retry lazily): %s", e)
+
     yield
     logger.info("Shutting down Indian Legal RAG API")
 
@@ -183,6 +194,114 @@ async def query_legal(request: QueryRequest):
         llm_used=llm_choice,
         confidence=round(avg_confidence, 3),
         query_type=query_type,
+    )
+
+
+@app.post("/api/query/stream", tags=["RAG"])
+async def query_legal_stream(request: QueryRequest):
+    """
+    Streaming RAG query endpoint (Server-Sent Events).
+
+    Streams the LLM answer token-by-token for instant user feedback.
+    Sources metadata is emitted as the final SSE event.
+
+    SSE event types:
+      - event: token   → data: {"token": "..."}
+      - event: sources  → data: {"sources": [...], "llm_used": "...", ...}
+      - event: error   → data: {"error": "..."}
+      - event: done    → data: [DONE]
+    """
+    logger.info("Stream query: '%s' (context=%s, detailed=%s)",
+                request.query, request.context, request.detailed)
+
+    # Step 1: Route query to appropriate LLM
+    llm_choice = route_query(request.query, force_detailed=request.detailed)
+    query_type = classify_query_type(request.query)
+
+    # Step 2: Get act filter for Pinecone
+    act_filter = get_act_filter(request.context)
+
+    # Step 3: Retrieve relevant chunks (this is fast, ~200ms)
+    try:
+        chunks = retrieve(request.query, context_filter=act_filter)
+    except Exception as e:
+        logger.error("Retrieval failed: %s", e)
+        raise HTTPException(status_code=500, detail=f"Retrieval error: {e}")
+
+    if not chunks:
+        async def empty_stream():
+            no_result = {
+                "token": (
+                    "I could not find relevant legal information for your query. "
+                    "Please try rephrasing or consult a qualified advocate."
+                )
+            }
+            yield f"event: token\ndata: {json.dumps(no_result)}\n\n"
+            meta = {
+                "sources": [],
+                "llm_used": llm_choice,
+                "confidence": 0.0,
+                "query_type": query_type,
+            }
+            yield f"event: sources\ndata: {json.dumps(meta)}\n\n"
+            yield "event: done\ndata: [DONE]\n\n"
+
+        return StreamingResponse(
+            empty_stream(),
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache",
+                "X-Accel-Buffering": "no",
+            },
+        )
+
+    # Step 4: Build prompt
+    prompt = build_prompt(request.query, chunks)
+
+    # Step 5: Build sources metadata (sent at the end)
+    sources = [
+        {
+            "act": c["source"].get("act", ""),
+            "section": c["source"].get("section", ""),
+            "chapter": c["source"].get("chapter", ""),
+            "text": c["text"][:500],
+            "score": c["score"],
+            "page": c["source"].get("page"),
+            "expanded": c.get("expanded", False),
+        }
+        for c in chunks
+    ]
+    avg_confidence = sum(c["score"] for c in chunks) / len(chunks)
+
+    async def token_stream():
+        """Generator that streams SSE events: tokens → sources → done."""
+        try:
+            for token in stream_answer(prompt, llm_choice=llm_choice):
+                payload = json.dumps({"token": token})
+                yield f"event: token\ndata: {payload}\n\n"
+
+            # After all tokens, send sources metadata
+            meta = {
+                "sources": sources,
+                "llm_used": llm_choice,
+                "confidence": round(avg_confidence, 3),
+                "query_type": query_type,
+            }
+            yield f"event: sources\ndata: {json.dumps(meta)}\n\n"
+            yield "event: done\ndata: [DONE]\n\n"
+
+        except Exception as e:
+            logger.error("Streaming generation failed: %s", e)
+            error_payload = json.dumps({"error": str(e)})
+            yield f"event: error\ndata: {error_payload}\n\n"
+
+    return StreamingResponse(
+        token_stream(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+        },
     )
 
 

@@ -3,9 +3,12 @@ LLM wrappers for Groq (LLaMA 3.3 70B) and Gemini (2.5 Flash).
 
 Groq  → fast answers: section lookups, simple definitions
 Gemini → complex reasoning: constitutional analysis, case law comparison
+
+Supports both blocking and streaming modes for low-latency UX.
 """
 
 import logging
+from collections.abc import Generator
 from groq import Groq
 from google import genai
 from google.genai.types import GenerateContentConfig
@@ -45,17 +48,31 @@ Format every response as:
 
 
 # ──────────────────────────────────────────────
-# Client Initialization
+# Client Initialization (cached singletons)
 # ──────────────────────────────────────────────
 
+_groq_client = None
+_gemini_client = None
+
+
 def _get_groq_client() -> Groq:
-    settings = get_settings()
-    return Groq(api_key=settings.GROQ_API_KEY)
+    """Return cached Groq client singleton."""
+    global _groq_client
+    if _groq_client is None:
+        settings = get_settings()
+        _groq_client = Groq(api_key=settings.GROQ_API_KEY)
+        logger.info("Groq client initialized")
+    return _groq_client
 
 
 def _get_gemini_client():
-    settings = get_settings()
-    return genai.Client(api_key=settings.google_api_key_resolved)
+    """Return cached Gemini client singleton."""
+    global _gemini_client
+    if _gemini_client is None:
+        settings = get_settings()
+        _gemini_client = genai.Client(api_key=settings.google_api_key_resolved)
+        logger.info("Gemini client initialized")
+    return _gemini_client
 
 
 # ──────────────────────────────────────────────
@@ -139,3 +156,68 @@ def generate_answer(prompt: str, llm_choice: str = "groq") -> str:
     if llm_choice == "gemini":
         return gemini_answer(prompt)
     return groq_answer(prompt)
+
+
+# ──────────────────────────────────────────────
+# Streaming LLM Functions
+# ──────────────────────────────────────────────
+
+def groq_stream(prompt: str) -> Generator[str, None, None]:
+    """
+    Stream tokens from Groq (LLaMA 3.3 70B).
+    Yields individual content deltas as they arrive.
+    """
+    settings = get_settings()
+    client = _get_groq_client()
+
+    try:
+        stream = client.chat.completions.create(
+            model=settings.GROQ_MODEL,
+            messages=[
+                {"role": "system", "content": SYSTEM_PROMPT},
+                {"role": "user", "content": prompt},
+            ],
+            temperature=settings.GROQ_TEMPERATURE,
+            max_tokens=settings.GROQ_MAX_TOKENS,
+            stream=True,
+        )
+        for chunk in stream:
+            delta = chunk.choices[0].delta
+            if delta and delta.content:
+                yield delta.content
+    except Exception as e:
+        logger.error("Groq streaming error: %s", e)
+        raise RuntimeError(f"Groq streaming failed: {e}") from e
+
+
+def gemini_stream(prompt: str) -> Generator[str, None, None]:
+    """
+    Stream tokens from Gemini 2.5 Flash.
+    Yields individual content deltas as they arrive.
+    """
+    settings = get_settings()
+    client = _get_gemini_client()
+
+    try:
+        response = client.models.generate_content_stream(
+            model=settings.GEMINI_MODEL,
+            contents=prompt,
+            config=GenerateContentConfig(
+                temperature=settings.GEMINI_TEMPERATURE,
+                max_output_tokens=settings.GEMINI_MAX_TOKENS,
+            ),
+        )
+        for chunk in response:
+            if chunk.text:
+                yield chunk.text
+    except Exception as e:
+        logger.error("Gemini streaming error: %s", e)
+        raise RuntimeError(f"Gemini streaming failed: {e}") from e
+
+
+def stream_answer(prompt: str, llm_choice: str = "groq") -> Generator[str, None, None]:
+    """Route to the appropriate streaming LLM based on choice."""
+    if llm_choice == "gemini":
+        yield from gemini_stream(prompt)
+    else:
+        yield from groq_stream(prompt)
